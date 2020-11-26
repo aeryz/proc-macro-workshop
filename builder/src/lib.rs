@@ -19,19 +19,66 @@ pub fn derive(input: TokenStream) -> TokenStream {
 
     let fields = &ds.fields;
 
-    let opt = fields.iter().map(|field| {
-        let ident = field.ident.as_ref().unwrap();
+    struct AltField {
+        is_opt: bool,
+        ty: syn::Type,
+        ident: Ident,
+    }
+    let mut alt_fields = Vec::new();
+
+    for field in fields {
+        let ident = field.ident.clone().unwrap();
+        let mut ty = &field.ty;
+        let mut is_optional = false;
+        if let syn::Type::Path(
+            syn::TypePath { 
+                qself: None, 
+                path: syn::Path { 
+                    segments: punch,
+                    ..
+                }
+            }
+        ) = ty {
+            if let Some(
+                syn::PathSegment { 
+                    ident, 
+                    arguments: syn::PathArguments::AngleBracketed(
+                        syn::AngleBracketedGenericArguments {
+                            args: inner_punch,
+                            ..
+                        }
+                    )
+                }
+            ) = punch.first() {
+                if ident == "Option" {
+                    if let Some(syn::GenericArgument::Type(inner_ty)) = inner_punch.first() {
+                        is_optional = true;
+                        ty = inner_ty;
+                    }
+                }
+            }
+        }
+
+        alt_fields.push(AltField {
+            is_opt: is_optional,
+            ty: ty.clone(),
+            ident: ident.clone(),
+        });
+    }
+
+    let opt = alt_fields.iter().map(|field| {
+        let ident = &field.ident;
         let ty = &field.ty;
         quote! { #ident: std::option::Option<#ty> }
     });
     
-    let none_opt = fields.iter().map(|field| {
-        let ident = field.ident.as_ref().unwrap();
+    let none_opt = alt_fields.iter().map(|field| {
+        let ident = &field.ident;
         quote!{ #ident: std::option::Option::None }
     });
 
-    let setters = fields.iter().map(|field | {
-        let ident = field.ident.as_ref().unwrap();
+    let setters = alt_fields.iter().map(|field | {
+        let ident = &field.ident;
         let ty = &field.ty;
         quote! { 
             fn #ident(&mut self, #ident: #ty) -> &mut Self {
@@ -41,12 +88,39 @@ pub fn derive(input: TokenStream) -> TokenStream {
         }
     });
 
-    let command_inner = fields.iter().map(|field| {
-        let ident = field.ident.as_ref().unwrap();
-        quote! {
-            #ident: self.#ident.clone().ok_or("#ident cannot be None")?
+
+    let command_inner = alt_fields.iter().map(|field| {
+        let ident = &field.ident;
+        if field.is_opt {
+            quote! { #ident: self.#ident.clone() } 
+        } else {
+            quote! {
+                #ident: self.#ident.clone().ok_or("#ident cannot be None")?
+            }
         }
     });
+
+//     Type::Path(
+//         TypePath {
+//             qself: None,
+//             path: Path {
+//                 segments: [
+//                     PathSegment {
+//                         ident: "Option",
+//                         arguments: PathArguments::AngleBracketed(
+//                             AngleBracketedGenericArguments {
+//                                 args: [
+//                                     GenericArgument::Type(
+//                                         ...
+//                                     ),
+//                                 ],
+//                             },
+//                         ),
+//                     },
+//                 ],
+//             },
+//         },
+//     )
 
     let expanded = quote! {
         pub struct #bident {
